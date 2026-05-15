@@ -1,0 +1,12 @@
+run = "uv run uvicorn decathlon.app:app --host 0.0.0.0 --port $PORT"
+
+[env]
+PORT = "8000"
+
+[[ports]]
+localPort = 8000
+externalPort = 80
+
+[deployment]
+run = ["sh", "-c", "uv run uvicorn decathlon.app:app --host 0.0.0.0 --port $PORT"]
+deploymentTarget = "cloudrun"

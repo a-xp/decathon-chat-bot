@@ -5,6 +5,16 @@ build/
 dist/
 wheels/
 *.egg-info
+.playwright-mcp/
 
 # Virtual environments
 .venv
+
+# Local sqlite
+*.db
+
+# Embedded vector store
+chroma_data/
+
+# Local environment
+.env 

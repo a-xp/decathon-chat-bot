@@ -1,2 +1,31 @@
 [tools]
 uv = "latest"
+
+[tasks."fetch-categories"]
+run = "uv run python -m decathlon.scrapers.categories"
+env = { PARALLELISM = "1" }
+
+[tasks."fetch-products"]
+run = "uv run python -m decathlon.scrapers.products"
+env = { PARALLELISM = "1" }
+
+[tasks."index-vectors"]
+description = "Embed & index products + categories into the vector store"
+run = "uv run python -m decathlon.indexing.index"
+
+[tasks."reindex"]
+description = "One command: scrape the catalog and rebuild the vector store"
+env = { PARALLELISM = "1" }
+run = [
+  "uv run python -m decathlon.scrapers.categories",
+  "uv run python -m decathlon.scrapers.products",
+  "uv run python -m decathlon.indexing.index",
+]
+
+[tasks."query-vectors"]
+description = "Semantic search over the vector store (pass query + flags)"
+run = "uv run python -m decathlon.indexing.query"
+
+[tasks."ui"]
+description = "Run the product expert chat UI"
+run = "uv run uvicorn decathlon.app.main:app --host 0.0.0.0 --port ${PORT:-8000} --reload"

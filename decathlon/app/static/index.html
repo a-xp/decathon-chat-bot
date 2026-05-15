@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Decathlon Product Expert</title>
+<style>
+  :root { --bg:#f4f6f8; --user:#0082c3; --bot:#fff; --border:#dde3e8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         background:var(--bg); display:flex; flex-direction:column; height:100vh; }
+  header { background:var(--user); color:#fff; padding:14px 20px; font-weight:600; }
+  #chat { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:12px; }
+  .msg { max-width:82%; padding:10px 14px; border-radius:14px; line-height:1.55;
+          word-wrap:break-word; }
+  .user { align-self:flex-end; background:var(--user); color:#fff; border-bottom-right-radius:4px;
+          white-space:pre-wrap; }
+  .bot  { align-self:flex-start; background:var(--bot); border:1px solid var(--border);
+          border-bottom-left-radius:4px; }
+  .err  { align-self:center; background:#fde8e8; color:#b00; border:1px solid #f5b5b5;
+          font-size:.9em; }
+  .typing { font-style:italic; opacity:.6; }
+  .cards { align-self:flex-start; max-width:75%; display:grid;
+           grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+           gap:10px; }
+  .card { display:flex; flex-direction:column; background:var(--bot);
+          border:1px solid var(--border); border-radius:12px; overflow:hidden;
+          text-decoration:none; color:inherit; transition:box-shadow .15s; }
+  .card:hover { box-shadow:0 2px 10px rgba(0,0,0,.12); }
+  .card img { width:100%; aspect-ratio:1/1; object-fit:cover;
+              background:#eef1f4; }
+  .card .body { padding:8px 10px; display:flex; flex-direction:column; gap:3px; }
+  .card .title { font-size:.85em; font-weight:600; line-height:1.25;
+                 display:-webkit-box; -webkit-line-clamp:2;
+                 -webkit-box-orient:vertical; overflow:hidden; }
+  .card .brand { font-size:.72em; text-transform:uppercase; opacity:.6;
+                 letter-spacing:.03em; }
+  .card .price { font-size:.85em; font-weight:600; color:var(--user); }
+  form { display:flex; gap:8px; padding:14px; border-top:1px solid var(--border); background:#fff; }
+  #input { flex:1; padding:12px; border:1px solid var(--border); border-radius:10px; font-size:1em; }
+  button { padding:0 20px; border:0; border-radius:10px; background:var(--user); color:#fff;
+           font-size:1em; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+
+  /* Markdown styling */
+  .msg p { margin: 0 0 8px 0; }
+  .msg p:last-child { margin-bottom: 0; }
+  .msg ul, .msg ol { margin: 4px 0 10px; padding-left: 22px; }
+  .msg li { margin-bottom: 5px; }
+  .msg h1, .msg h2, .msg h3, .msg h4 {
+    margin: 10px 0 4px; font-size: 1em; font-weight: 700; line-height: 1.3;
+  }
+  .msg h1:first-child, .msg h2:first-child, .msg h3:first-child { margin-top: 2px; }
+  .msg code { background: rgba(0,0,0,0.06); padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: .9em; }
+  .msg a { color: var(--user); text-decoration: underline; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <header>🏕️ Decathlon Product Expert</header>
+  <div id="chat">
+    <div class="msg bot">Hi! Ask me about Decathlon sports gear and I'll help you choose.</div>
+  </div>
+  <form id="form">
+    <input id="input" autocomplete="off" placeholder="Ask about a product…" />
+    <button id="send" type="submit">Send</button>
+  </form>
+
+<script>
+  const chat = document.getElementById("chat");
+  const form = document.getElementById("form");
+  const input = document.getElementById("input");
+  const sendBtn = document.getElementById("send");
+  const history = [];
+
+  function addMsg(text, cls) {
+    const el = document.createElement("div");
+    el.className = "msg " + cls;
+    if (cls.includes("bot") && !cls.includes("typing") && typeof marked !== 'undefined') {
+      el.innerHTML = marked.parse(text);
+    } else {
+      el.textContent = text;
+    }
+    chat.appendChild(el);
+    chat.scrollTop = chat.scrollHeight;
+    return el;
+  }
+
+  function addProducts(products) {
+    if (!products || !products.length) return;
+    const grid = document.createElement("div");
+    grid.className = "cards";
+    for (const p of products) {
+      const card = document.createElement("a");
+      card.className = "card";
+      if (p.url) { card.href = p.url; card.target = "_blank"; card.rel = "noopener"; }
+
+      const img = document.createElement("img");
+      img.src = p.image_url;
+      img.alt = p.title || "";
+      img.loading = "lazy";
+      card.appendChild(img);
+
+      const body = document.createElement("div");
+      body.className = "body";
+      if (p.brand) {
+        const b = document.createElement("div");
+        b.className = "brand";
+        b.textContent = p.brand;
+        body.appendChild(b);
+      }
+      const t = document.createElement("div");
+      t.className = "title";
+      t.textContent = p.title || "";
+      body.appendChild(t);
+      if (p.price != null) {
+        const pr = document.createElement("div");
+        pr.className = "price";
+        pr.textContent = Math.round(p.price).toLocaleString('ru-KZ') + ' ₸';
+        body.appendChild(pr);
+      }
+      card.appendChild(body);
+      grid.appendChild(card);
+    }
+    chat.appendChild(grid);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+
+    addMsg(text, "user");
+    history.push({ role: "user", content: text });
+    input.value = "";
+    input.disabled = sendBtn.disabled = true;
+
+    const typing = addMsg("thinking…", "bot typing");
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: history }),
+      });
+      const data = await res.json();
+      typing.remove();
+
+      if (!res.ok) {
+        addMsg(data.error || ("Request failed (HTTP " + res.status + ")."), "err");
+      } else {
+        addMsg(data.reply, "bot");
+        addProducts(data.products || []);
+        history.push({ role: "assistant", content: data.reply });
+      }
+    } catch (err) {
+      typing.remove();
+      addMsg("Network error: " + err.message, "err");
+    } finally {
+      input.disabled = sendBtn.disabled = false;
+      input.focus();
+    }
+  });
+</script>
+</body>
+</html>
