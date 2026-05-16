@@ -12,11 +12,15 @@ results — the same shape as the gender fallback.
 """
 
 import logging
+from collections import Counter
 
-from decathlon.app.catalog import DISPLAY_TO_ID
+from decathlon.app.catalog import DISPLAY_TO_ID, ID_TO_DISPLAY
 from decathlon.core.documents import ancestor_match, parse_document
 from decathlon.core.embeddings import embed_texts
 from decathlon.core.vectordb import PRODUCTS, get_client, get_collection
+
+FACET_N = 200
+FACET_DISTANCE_THRESHOLD = 0.50
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,7 @@ def search_products(
     gender: str | None = None,
     brand: str | None = None,
     size: str | None = None,
+    color: str | None = None,
 ) -> list[dict]:
     """Semantic search over the catalog.
 
@@ -69,9 +74,10 @@ def search_products(
 
     brand_lc = brand.strip().lower() if brand and brand.strip() else None
     size_lc = size.strip().lower() if size and size.strip() else None
+    color_lc = color.strip().lower() if color and color.strip() else None
 
-    # Over-fetch when post-filtering client-side (category, brand, and/or size).
-    post_filtered = bool(ancestor_ids) or brand_lc is not None or size_lc is not None
+    # Over-fetch when post-filtering client-side (category, brand, size, color).
+    post_filtered = bool(ancestor_ids) or brand_lc is not None or size_lc is not None or color_lc is not None
     n_results = n * 5 if post_filtered else n
 
     client = get_client()
@@ -125,7 +131,11 @@ def search_products(
             return False
         if size_lc is not None:
             stored = (meta.get("sizes") or "").lower()
-            if not any(size_lc in tok for tok in stored.split()):
+            if not any(size_lc in tok for tok in stored.split("\x1f")):
+                return False
+        if color_lc is not None:
+            stored = (meta.get("colors") or "").lower()
+            if not any(color_lc in tok for tok in stored.split("\x1f")):
                 return False
         return True
 
@@ -143,3 +153,89 @@ def search_products(
         )
         return [to_product(*r) for r in rows[:n]]
     return [to_product(*r) for r in filtered[:n]]
+
+
+def get_facets(
+    query: str,
+    categories: list[str] | None = None,
+    gender: str | None = None,
+) -> dict:
+    """Aggregate available colors, brands, sizes and price range for a query slice.
+
+    Fetches up to FACET_N semantically relevant results (within FACET_DISTANCE_THRESHOLD),
+    applies the same category/gender filters as search_products, then counts facet values.
+    """
+    vec = embed_texts([query])[0]
+
+    ancestor_ids: list[int] = []
+    for disp in categories or []:
+        cid = DISPLAY_TO_ID.get(disp)
+        if cid is not None:
+            ancestor_ids.append(cid)
+
+    gender_ids = GENDER_IDS.get(gender) if gender else None
+    where = {"gender_id": {"$in": gender_ids}} if gender_ids else None
+
+    client = get_client()
+    collection = get_collection(client, PRODUCTS)
+
+    def run(where_clause):
+        return collection.query(
+            query_embeddings=[vec],
+            n_results=FACET_N,
+            where=where_clause,
+            include=["metadatas", "distances"],
+        )
+
+    res = run(where)
+    if where is not None and len(res["ids"][0]) < 10:
+        logger.info("get_facets: gender filter starved results; relaxing")
+        res = run(None)
+
+    rows = list(zip(res["metadatas"][0], res["distances"][0]))
+    rows = [(m, d) for m, d in rows if d <= FACET_DISTANCE_THRESHOLD]
+    if ancestor_ids:
+        rows = [(m, d) for m, d in rows if any(ancestor_match(m, aid) for aid in ancestor_ids)]
+
+    color_counts: Counter = Counter()
+    brand_counts: Counter = Counter()
+    size_counts: Counter = Counter()
+    type_counts: Counter = Counter()
+    prices: list[float] = []
+
+    for meta, _ in rows:
+        for c in (meta.get("colors") or "").split("\x1f"):
+            if c:
+                color_counts[c] += 1
+        brand = (meta.get("brand") or "").strip()
+        if brand:
+            brand_counts[brand] += 1
+        for s in (meta.get("sizes") or "").split("\x1f"):
+            if s:
+                size_counts[s] += 1
+        best: str | None = None
+        for pid_str in (meta.get("path_ids") or "").split():
+            try:
+                display = ID_TO_DISPLAY.get(int(pid_str))
+            except ValueError:
+                continue
+            if display and (best is None or display.count(" / ") > best.count(" / ")):
+                best = display
+        if best:
+            type_counts[best] += 1
+        price = meta.get("price")
+        if price is not None:
+            prices.append(float(price))
+
+    result: dict = {"total": len(rows)}
+    if type_counts:
+        result["types"] = [{"value": v, "count": c} for v, c in type_counts.most_common(15)]
+    if color_counts:
+        result["colors"] = [{"value": v, "count": c} for v, c in color_counts.most_common(15)]
+    if brand_counts:
+        result["brands"] = [{"value": v, "count": c} for v, c in brand_counts.most_common(10)]
+    if size_counts:
+        result["sizes"] = [{"value": v, "count": c} for v, c in size_counts.most_common(20)]
+    if prices:
+        result["price_range"] = {"min": round(min(prices)), "max": round(max(prices))}
+    return result

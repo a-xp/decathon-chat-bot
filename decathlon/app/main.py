@@ -28,6 +28,7 @@ from decathlon.app.agent import (  # noqa: E402 - must follow load_dotenv()
     run_agent,
 )
 from decathlon.app.catalog import PRODUCT_URL
+from decathlon.app.productdb import get_cards_by_ids
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,16 +44,26 @@ SYSTEM_PROMPT = (
     "You have catalog tools. Use them ONLY when the user is actually asking "
     "about, shopping for, or comparing products or gear — never for "
     "greetings, thanks, or general chit-chat; just reply normally then.\n"
+    "Before searching the catalog, make sure you have enough to go on. "
+    "If the request is ambiguous, ask ONE concise clarifying question covering "
+    "the most important unknown — typically: product type (if unclear), who "
+    "it's for (age/gender), size, or color. Do not ask for information that is "
+    "obviously irrelevant or already stated. Ask at most one follow-up before "
+    "searching; don't pepper the user with multiple questions at once.\n"
     "When a product question does need the catalog, prefer this flow:\n"
     "1. If you want to narrow to a section, call `find_categories` to get the "
     "exact valid category paths.\n"
-    "2. Call `search_products` (pass `gender`/`categories`/`brand` only when "
-    "the user stated or clearly implied them).\n"
-    "3. Call `get_product` for a product's full specs before a detailed "
+    "2. Call `search_products` (pass `gender`/`categories`/`brand`/`color` only "
+    "when the user stated or clearly implied them).\n"
+    "3. If search_products returns nothing, or the user asks what colors/brands/"
+    "sizes are available, call `get_facets` to explore what exists and suggest "
+    "alternatives.\n"
+    "4. Call `get_product` for a product's full specs before a detailed "
     "comparison or when the user asks about characteristics.\n"
     "Base recommendations only on products returned by the tools; do not "
-    "invent products. Cite each recommended product by its exact name and "
-    "include its link."
+    "invent products. For each product you recommend, append [product:ID] "
+    "immediately after its name, where ID is the product's `id` from "
+    "search_products. Do not include full URLs in your reply."
 )
 
 if CHAT_LANGUAGE and CHAT_LANGUAGE.lower() != "auto":
@@ -83,44 +94,23 @@ async def healthz():
     }
 
 
-def cited_products(reply: str, products: list[dict]) -> list[dict]:
-    """Trim the products seen during the run to the ones the reply references.
-
-    Primary signal: handles extracted from /products/{handle} URLs in markdown
-    links. Fallback: handle or title appearing as plain text in the reply.
-    Products without an image are dropped since they can't render a card.
-    """
-    reply_lc = reply.lower()
-    linked_handles: set[str] = {
-        m.group(1) for m in re.finditer(r"/products/([a-z0-9][a-z0-9-]*)", reply_lc)
-    }
-    cards = []
-    seen: set[str] = set()
-    for p in products:
-        image_url = p.get("image_url")
-        if not image_url:
-            continue
-        handle = (p.get("handle") or "").lower()
-        title = p.get("title") or ""
-        if handle in seen:
-            continue
-        if (
-            (handle and handle in linked_handles)
-            or (handle and handle in reply_lc)
-            or (title and title.lower() in reply_lc)
-        ):
-            seen.add(handle)
-            cards.append(
-                {
-                    "title": title,
-                    "brand": p.get("brand"),
-                    "price": p.get("price"),
-                    "available": p.get("available"),
-                    "image_url": image_url,
-                    "url": PRODUCT_URL.format(handle=handle) if handle else None,
-                }
-            )
-    return cards
+def cited_products(reply: str) -> list[dict]:
+    """Build product cards for [product:ID] citations in the reply."""
+    ids = list(dict.fromkeys(
+        m.group(1) for m in re.finditer(r"\[product:([^\]]+)\]", reply)
+    ))
+    return [
+        {
+            "title": p["title"],
+            "brand": p.get("brand"),
+            "price": p.get("price"),
+            "available": p.get("available"),
+            "image_url": p.get("image_url"),
+            "url": PRODUCT_URL.format(handle=p["handle"]),
+        }
+        for p in get_cards_by_ids(ids)
+        if p.get("image_url")
+    ]
 
 
 @app.post("/api/chat")
@@ -129,7 +119,7 @@ async def chat(req: ChatRequest):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *conversation]
 
     try:
-        reply, pool = await run_agent(messages)
+        reply = await run_agent(messages)
     except APIError as e:
         logger.error("LLM API error: %s", e)
         return JSONResponse(
@@ -149,7 +139,9 @@ async def chat(req: ChatRequest):
             content={"error": "LLM API returned an empty response."},
         )
 
-    return {"reply": reply, "products": cited_products(reply, pool)}
+    products = cited_products(reply)
+    clean_reply = re.sub(r"\s*\[product:[^\]]+\]", "", reply).strip()
+    return {"reply": clean_reply, "products": products}
 
 
 # Serve the chat UI at "/". Path resolved relative to this file so it works

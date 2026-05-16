@@ -50,6 +50,61 @@ def _section_path(product_id: str) -> str:
     return ""
 
 
+def get_cards_by_ids(ids: list[str]) -> list[dict]:
+    """Fetch card-level fields for a list of product ids (for UI rendering)."""
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            rows = conn.execute(
+                f"SELECT id, handle, title, brand, price, available, image_url "
+                f"FROM products WHERE id IN ({placeholders})",
+                ids,
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning("products.db read failed for ids %s: %s", ids, e)
+        return []
+    by_id = {str(r[0]): r for r in rows}
+    result = []
+    for pid in ids:
+        r = by_id.get(str(pid))
+        if r:
+            _, h, t, b, p, a, img = r
+            result.append({
+                "handle": h, "title": t, "brand": b, "price": p,
+                "available": bool(a) if a is not None else None, "image_url": img,
+            })
+    return result
+
+
+def get_cards_by_handles(handles: list[str]) -> list[dict]:
+    """Fetch card-level fields for a list of product handles (for UI rendering)."""
+    if not handles:
+        return []
+    placeholders = ",".join("?" * len(handles))
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            rows = conn.execute(
+                f"SELECT handle, title, brand, price, available, image_url "
+                f"FROM products WHERE handle IN ({placeholders})",
+                handles,
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning("products.db read failed for handles %s: %s", handles, e)
+        return []
+    return [
+        {"handle": h, "title": t, "brand": b, "price": p, "available": bool(a) if a is not None else None, "image_url": img}
+        for h, t, b, p, a, img in rows
+    ]
+
+
 def get_product_details(product_id: str) -> dict | None:
     """Full characteristics for one product, for exploration/comparison.
 

@@ -26,7 +26,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from decathlon.app import search as search_mod
-from decathlon.app.catalog import CATEGORY_DISPLAYS, ID_TO_DISPLAY, PRODUCT_URL
+from decathlon.app.catalog import CATEGORY_DISPLAYS, ID_TO_DISPLAY
 from decathlon.app.productdb import get_product_details
 from decathlon.core.embeddings import embed_texts
 from decathlon.core.vectordb import CATEGORIES, get_client, get_collection
@@ -67,9 +67,11 @@ class SearchProductsArgs(BaseModel):
         Field(description=(
             "The product description in the user's language — the thing being "
             "shopped for and its defining attributes (type, sport, material, "
-            "colour, season). Keep the user's product nouns verbatim; never "
-            "translate them. Do NOT put the audience / gender / age here — "
-            "use `gender` instead."
+            "season). Normalize informal or diminutive Russian forms to "
+            "standard catalog terms (e.g. 'штанишки'/'штаны' → 'брюки', "
+            "'шортики' → 'шорты', 'маечка' → 'майка/футболка'). Never translate "
+            "product nouns to another language. Do NOT put colour, audience, "
+            "gender, or age here — use the dedicated fields instead."
         )),
     ]
     gender: Annotated[
@@ -102,6 +104,35 @@ class SearchProductsArgs(BaseModel):
             "this size are returned. Omit when the user has not mentioned a size."
         )),
     ] = None
+    color: Annotated[
+        Optional[str],
+        Field(None, description=(
+            "Color to filter by in Russian, as the user stated it "
+            "(e.g. 'желтый', 'синий', 'красный'). Only products that have a "
+            "variant of this color are returned. Omit when the user has not "
+            "mentioned a color."
+        )),
+    ] = None
+
+
+class GetFacetsArgs(BaseModel):
+    query: Annotated[
+        str,
+        Field(description=(
+            "The product concept to explore, same normalisation rules as "
+            "search_products (e.g. 'брюки', 'кроссовки для бега')."
+        )),
+    ]
+    gender: Annotated[
+        Optional[Literal[tuple(search_mod.GENDERS)]],  # type: ignore[valid-type]
+        Field(None, description="Same as search_products `gender`."),
+    ] = None
+    categories: Annotated[
+        Optional[list[str]],
+        Field(None, description=(
+            "Category paths from find_categories to narrow the slice."
+        )),
+    ] = None
 
 
 class GetProductArgs(BaseModel):
@@ -120,6 +151,17 @@ def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict:
 
 
 TOOLS = [
+    _tool_schema(
+        "get_facets",
+        (
+            "Explore what is actually available for a product type: returns "
+            "colors, brands, sizes, and price range aggregated over semantically "
+            "relevant products. Call this (1) when the user asks what colors/brands/"
+            "options exist for something, or (2) after search_products returns "
+            "nothing, to discover alternatives to suggest."
+        ),
+        GetFacetsArgs,
+    ),
     _tool_schema(
         "find_categories",
         (
@@ -199,8 +241,11 @@ def _find_categories(query: str) -> list[str]:
     return out[:FIND_CATEGORIES_N]
 
 
-def _exec_tool(name: str, args: dict, pool: list[dict]) -> object:
-    """Run one tool call. Accumulates renderable products into `pool`."""
+def _exec_tool(name: str, args: dict) -> object:
+    if name == "get_facets":
+        a = GetFacetsArgs(**args)
+        return search_mod.get_facets(a.query, categories=a.categories, gender=a.gender)
+
     if name == "find_categories":
         a = FindCategoriesArgs(**args)
         cats = _find_categories(a.query)
@@ -218,13 +263,12 @@ def _exec_tool(name: str, args: dict, pool: list[dict]) -> object:
             gender=a.gender,
             brand=a.brand,
             size=a.size,
+            color=a.color,
         )
-        pool.extend(products)
         return [
             {
                 "id": p["id"],
                 "title": p["title"],
-                "url": PRODUCT_URL.format(handle=p["handle"]) if p.get("handle") else None,
                 "category": p.get("section_path", "").replace("\n", " | "),
                 "price": p.get("price"),
                 "brand": p.get("brand"),
@@ -235,22 +279,23 @@ def _exec_tool(name: str, args: dict, pool: list[dict]) -> object:
     if name == "get_product":
         a = GetProductArgs(**args)
         details = get_product_details(a.product_id)
-        if details:
-            pool.append(details)
-        return details or {"error": "No product with that id."}
+        if not details:
+            return {"error": "No product with that id."}
+        for key in ("handle", "image_url", "model_code"):
+            details.pop(key, None)
+        return details
 
     return {"error": f"Unknown tool {name!r}."}
 
 
-async def run_agent(messages: list[dict]) -> tuple[str, list[dict]]:
-    """Drive the tool-use loop. Returns (reply, products seen during the run).
+async def run_agent(messages: list[dict]) -> str:
+    """Drive the tool-use loop. Returns the model's final reply.
 
     `messages` is the full chat history including the leading system prompt.
     Raises on model/transport failure (the endpoint maps that to a 502); tool
     failures are fed back to the model instead of raising.
     """
     convo = list(messages)
-    pool: list[dict] = []
 
     for _ in range(MAX_TOOL_ROUNDS):
         resp = await _client().chat.completions.create(
@@ -264,7 +309,7 @@ async def run_agent(messages: list[dict]) -> tuple[str, list[dict]]:
         tool_calls = msg.tool_calls or []
 
         if not tool_calls:
-            return (msg.content or "").strip(), pool
+            return (msg.content or "").strip()
 
         convo.append(
             {
@@ -286,7 +331,7 @@ async def run_agent(messages: list[dict]) -> tuple[str, list[dict]]:
         for tc in tool_calls:
             try:
                 args = json.loads(tc.function.arguments or "{}")
-                result = _exec_tool(tc.function.name, args, pool)
+                result = _exec_tool(tc.function.name, args)
             except Exception as e:  # noqa: BLE001 - feed errors back to model
                 logger.warning("Tool %s failed: %s", tc.function.name, e)
                 result = {"error": f"Tool failed: {e}"}
@@ -304,4 +349,4 @@ async def run_agent(messages: list[dict]) -> tuple[str, list[dict]]:
         messages=convo,
         stream=False,
     )
-    return (resp.choices[0].message.content or "").strip(), pool
+    return (resp.choices[0].message.content or "").strip()

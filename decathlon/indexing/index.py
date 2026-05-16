@@ -208,15 +208,27 @@ def index_products(conn, cats, by_legacy, collection) -> None:
             raw = {}
         size_vals: list[str] = []
         seen_sizes: set[str] = set()
+        color_vals: list[str] = []
+        seen_colors: set[str] = set()
         for v in (raw.get("variants") or {}).get("nodes") or []:
             for opt in (v or {}).get("selectedOptions") or []:
-                if opt.get("name") == "Size":
-                    val = (opt.get("value") or "").strip()
-                    if val and val != "no_size:1" and val not in seen_sizes:
+                name = opt.get("name")
+                val = (opt.get("value") or "").strip()
+                if not val:
+                    continue
+                if name == "Size":
+                    if val != "no_size:1" and val not in seen_sizes:
                         seen_sizes.add(val)
                         size_vals.append(val)
+                elif name == "Color":
+                    lc = val.lower()
+                    if lc not in seen_colors:
+                        seen_colors.add(lc)
+                        color_vals.append(lc)
         if size_vals:
-            meta["sizes"] = " ".join(size_vals)
+            meta["sizes"] = "\x1f".join(size_vals)
+        if color_vals:
+            meta["colors"] = "\x1f".join(color_vals)
 
         ids.append(str(pid))
         docs.append(document)
