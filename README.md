@@ -13,15 +13,15 @@ Each chat turn runs an agentic tool-use loop before the assistant replies:
 2. **Search** — the query is embedded (bge-m3) and matched against the product
    catalog in a local Chroma store, optionally filtered by gender, category, and
    brand.
-3. **Product detail** — the model can call `get_product` for full specs
+3. **Facet exploration** — the model calls `get_facets` to see what colors,
+   brands, sizes, and price ranges actually exist for a product type — used when
+   the user asks "what options are available?" or when a search returns nothing.
+4. **Product detail** — the model can call `get_product` for full specs
    (composition, sizes, benefits) before a detailed comparison.
-4. **Answer** — the assistant recommends from retrieved products; the UI renders
+5. **Answer** — the assistant recommends from retrieved products; the UI renders
    cited ones as cards.
 
-There is **no separate router model**: the chat model drives the whole loop via
-the system prompt. Everything (chat, embeddings) talks to a single
-**OpenAI-compatible endpoint** — LM Studio by default, but any compatible
-server works.
+Everything (chat, embeddings) talks to a single **OpenAI-compatible endpoint** — LM Studio by default, but any compatible server works.
 
 > For architecture decisions and non-obvious design choices, see
 > [`CLAUDE.md`](CLAUDE.md).
