@@ -1,16 +1,15 @@
 """Embeddings via the OpenAI-compatible endpoint (bge-m3).
 
-Reuses the same OPENAI_BASE_URL / OPENAI_API_KEY config as the chat app
-(see decathlon/app.py); the embedding model is configured separately.
+Reuses the same OPENAI_BASE_URL / OPENAI_API_KEY config as the chat app;
+the embedding model is configured separately via OPENAI_EMBED_MODEL.
 """
 
-import os
 import logging
+import os
 
 import httpx
 from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load a local .env if present (real env vars take precedence).

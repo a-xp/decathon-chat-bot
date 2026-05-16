@@ -1,16 +1,16 @@
-"""Category catalog used to ground the router's category choice.
+"""Category catalog used to ground the agent's category choices.
 
 Level-0 (root) sections carry no useful signal on their own, but their name
-disambiguates the deeper categories for the router (e.g. "Мужчины / Обувь" vs
+disambiguates the deeper categories for the agent (e.g. "Мужчины / Обувь" vs
 "Детям / Детская обувь", which would otherwise both collapse to "Обувь"). We
 therefore present each category as its full ancestor path
 ``"<root> / <level-1> [ / <level-2>]"`` and map that display string back to the
 category id, which is then used as an ancestor filter over `path_ids`.
 
-Both level-1 and level-2 categories are exposed so the router can pick a
-fine-grained subtree when it is confident, or fall back to a broad level-1 one
+Both level-1 and level-2 categories are exposed so the agent can pick a
+fine-grained subtree when confident, or fall back to a broad level-1 one
 otherwise. An over-specific pick is safe: `search.search_products` treats the
-category as a soft preference and backfills, so it can never collapse results.
+category as a hard filter but backfills when it would starve results.
 """
 
 import sqlite3
@@ -18,7 +18,7 @@ import sqlite3
 DB_PATH = "products.db"
 PRODUCT_URL = "https://decathlon.kz/p/{handle}"
 
-# Deepest category level offered to the router. Level 1 is broad ("Обувь"),
+# Deepest category level offered to the agent. Level 1 is broad ("Обувь"),
 # level 2 is the useful shopping granularity ("Обувь / Кроссовки для бега").
 MAX_CATEGORY_LEVEL = 2
 
