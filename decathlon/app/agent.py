@@ -18,10 +18,12 @@ can recover or apologise) rather than crashing the request.
 import json
 import logging
 import os
+from typing import Annotated, Literal, Optional
 
 import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from pydantic import BaseModel, Field
 
 from decathlon.app import search as search_mod
 from decathlon.app.catalog import CATEGORY_DISPLAYS, ID_TO_DISPLAY, PRODUCT_URL
@@ -47,118 +49,106 @@ PRODUCT_SEARCH_N = int(os.getenv("PRODUCT_SEARCH_N", "10"))
 FIND_CATEGORIES_N = 15
 
 
+# --- Tool parameter models ---------------------------------------------------
+
+class FindCategoriesArgs(BaseModel):
+    query: Annotated[
+        str,
+        Field(description=(
+            "A category keyword or concept in the user's language, "
+            "e.g. 'кроссовки для бега', 'палатки', 'детская обувь'."
+        )),
+    ]
+
+
+class SearchProductsArgs(BaseModel):
+    query: Annotated[
+        str,
+        Field(description=(
+            "The product description in the user's language — the thing being "
+            "shopped for and its defining attributes (type, sport, material, "
+            "colour, season). Keep the user's product nouns verbatim; never "
+            "translate them. Do NOT put the audience / gender / age here — "
+            "use `gender` instead."
+        )),
+    ]
+    gender: Annotated[
+        Optional[Literal[tuple(search_mod.GENDERS)]],  # type: ignore[valid-type]
+        Field(None, description=(
+            "Who the product is for, if stated or clearly implied "
+            "('для девочки'->girls, 'мужские'->men, 'детские'->kids). "
+            "Omit if unspecified or irrelevant (a tent, a ball)."
+        )),
+    ] = None
+    categories: Annotated[
+        Optional[list[str]],
+        Field(None, description=(
+            "Full category path strings exactly as returned by find_categories, "
+            "to restrict the search. A product matching ANY of them is kept."
+        )),
+    ] = None
+    brand: Annotated[
+        Optional[str],
+        Field(None, description=(
+            "Brand to filter by, e.g. 'Quechua', 'Kipsta'. "
+            "Matched case-insensitively."
+        )),
+    ] = None
+    size: Annotated[
+        Optional[str],
+        Field(None, description=(
+            "Size to filter by, as the user stated it (e.g. 'M', 'XL', "
+            "'EU42', '42'). Only products that have a variant of approximately "
+            "this size are returned. Omit when the user has not mentioned a size."
+        )),
+    ] = None
+
+
+class GetProductArgs(BaseModel):
+    product_id: Annotated[
+        str,
+        Field(description="The product id from search_products."),
+    ]
+
+
+def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict:
+    schema = model.model_json_schema()
+    schema.pop("title", None)
+    for prop in schema.get("properties", {}).values():
+        prop.pop("title", None)
+    return {"type": "function", "function": {"name": name, "description": description, "parameters": schema}}
+
+
 TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "find_categories",
-            "description": (
-                "Look up valid Decathlon catalog category paths matching a "
-                "keyword or concept. Call this BEFORE search_products when you "
-                "want to constrain a search to a section, to discover the "
-                "exact full path strings to pass as `categories`."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": (
-                            "A category keyword or concept in the user's "
-                            "language, e.g. 'кроссовки для бега', 'палатки', "
-                            "'детская обувь'."
-                        ),
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_products",
-            "description": (
-                "Search the Decathlon catalog and return up to 10 matching "
-                "products. Use this when the user is asking for, comparing, or "
-                "shopping for sports gear."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": (
-                            "The product description in the user's language — "
-                            "the thing being shopped for and its defining "
-                            "attributes (type, sport, material, colour, "
-                            "season). Keep the user's product nouns verbatim; "
-                            "never translate them. Do NOT put the audience / "
-                            "gender / age here — use `gender` instead."
-                        ),
-                    },
-                    "gender": {
-                        "type": "string",
-                        "enum": search_mod.GENDERS,
-                        "description": (
-                            "Who the product is for, if stated or clearly "
-                            "implied ('для девочки'->girls, 'мужские'->men, "
-                            "'детские'->kids). Omit if unspecified or "
-                            "irrelevant (a tent, a ball)."
-                        ),
-                    },
-                    "categories": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Optional. Full category path strings exactly as "
-                            "returned by find_categories, to restrict the "
-                            "search. A product matching ANY of them is kept."
-                        ),
-                    },
-                    "brand": {
-                        "type": "string",
-                        "description": (
-                            "Optional brand to filter by, e.g. 'Quechua', "
-                            "'Kipsta'. Matched case-insensitively."
-                        ),
-                    },
-                    "size": {
-                        "type": "string",
-                        "description": (
-                            "Optional size to filter by, as the user stated it "
-                            "(e.g. 'M', 'XL', 'EU42', '42'). Only products "
-                            "that have a variant of approximately this size are "
-                            "returned. Omit when the user has not mentioned a size."
-                        ),
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_product",
-            "description": (
-                "Get full characteristics of one product (description, "
-                "composition, technical specs, benefits, available "
-                "sizes/colours) for detailed exploration or comparison. Use "
-                "the product `id` from a search_products result."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "product_id": {
-                        "type": "string",
-                        "description": "The product id from search_products.",
-                    },
-                },
-                "required": ["product_id"],
-            },
-        },
-    },
+    _tool_schema(
+        "find_categories",
+        (
+            "Look up valid Decathlon catalog category paths matching a keyword "
+            "or concept. Call this BEFORE search_products when you want to "
+            "constrain a search to a section, to discover the exact full path "
+            "strings to pass as `categories`."
+        ),
+        FindCategoriesArgs,
+    ),
+    _tool_schema(
+        "search_products",
+        (
+            "Search the Decathlon catalog and return up to 10 matching products. "
+            "Use this when the user is asking for, comparing, or shopping for "
+            "sports gear."
+        ),
+        SearchProductsArgs,
+    ),
+    _tool_schema(
+        "get_product",
+        (
+            "Get full characteristics of one product (description, composition, "
+            "technical specs, benefits, available sizes/colours) for detailed "
+            "exploration or comparison. Use the product `id` from a "
+            "search_products result."
+        ),
+        GetProductArgs,
+    ),
 ]
 
 
@@ -212,20 +202,22 @@ def _find_categories(query: str) -> list[str]:
 def _exec_tool(name: str, args: dict, pool: list[dict]) -> object:
     """Run one tool call. Accumulates renderable products into `pool`."""
     if name == "find_categories":
-        cats = _find_categories(args.get("query", ""))
+        a = FindCategoriesArgs(**args)
+        cats = _find_categories(a.query)
         return {"categories": cats} if cats else {
             "categories": [],
             "note": "No matching categories; search without a category filter.",
         }
 
     if name == "search_products":
+        a = SearchProductsArgs(**args)
         products = search_mod.search_products(
-            args.get("query", ""),
-            categories=args.get("categories"),
+            a.query,
+            categories=a.categories,
             n=PRODUCT_SEARCH_N,
-            gender=args.get("gender"),
-            brand=args.get("brand"),
-            size=args.get("size"),
+            gender=a.gender,
+            brand=a.brand,
+            size=a.size,
         )
         pool.extend(products)
         return [
@@ -241,7 +233,8 @@ def _exec_tool(name: str, args: dict, pool: list[dict]) -> object:
         ] or {"note": "No products found for that query/filters."}
 
     if name == "get_product":
-        details = get_product_details(str(args.get("product_id", "")))
+        a = GetProductArgs(**args)
+        details = get_product_details(a.product_id)
         if details:
             pool.append(details)
         return details or {"error": "No product with that id."}
