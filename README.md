@@ -11,8 +11,8 @@ Each chat turn runs an agentic tool-use loop before the assistant replies:
 1. **Category discovery** — the model calls `find_categories` to look up valid
    category paths when it wants to narrow the search to a section.
 2. **Search** — the query is embedded (bge-m3) and matched against the product
-   catalog in a local Chroma store, optionally filtered by gender, category, and
-   brand.
+   catalog in a local Chroma store, optionally filtered by gender, category,
+   brand, size, and color.
 3. **Facet exploration** — the model calls `get_facets` to see what colors,
    brands, sizes, and price ranges actually exist for a product type — used when
    the user asks "what options are available?" or when a search returns nothing.
